@@ -1,222 +1,388 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Minecraft-Inspired Web Game</title>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    #blocker {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
-      z-index: 50;
-    }
-    #instructions {
-      position: absolute;
-      top: 50%;
-      width: 100%;
-      text-align: center;
-      color: #fff;
-      font-family: Arial, sans-serif;
-      font-size: 24px;
-      z-index: 100;
-      display: block;
-    }
-  </style>
+    <!-- Define the character encoding for proper text rendering -->
+    <meta charset="UTF-8">
+    <!-- Ensure the game scales correctly on various devices -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft-like 2D Game</title>
+    <style>
+        /* Remove default margins and padding from the body to use full screen space */
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000; /* Black background for contrast outside canvas */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh; /* Full viewport height */
+        }
+
+        /* Style the canvas to define the game area */
+        #gameCanvas {
+            border: 2px solid #333; /* Subtle border for visibility */
+        }
+    </style>
 </head>
 <body>
-  <div id="blocker">
-    <div id="instructions">
-      <span style="font-size:40px">Click to Play</span>
-      <br/><br/>
-      <strong>Controls:</strong><br/>
-      Move: WASD<br/>
-      Look: Mouse<br/>
-      Left Click: Remove Block<br/>
-      Right Click: Place Block<br/><br/>
-      (This game is provided for educational, experimental, and creative purposes.)
-    </div>
-  </div>
+    <!-- The canvas element is the game's rendering surface -->
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <script>
+        // ** Constants Definition **
+        // Define game constants for easy tweaking and readability
+        const BLOCK_SIZE = 32;           // Size of each block in pixels (32x32)
+        const WORLD_WIDTH = 256;         // World width in blocks
+        const WORLD_HEIGHT = 64;         // World height in blocks
+        const CANVAS_WIDTH = 800;        // Canvas width in pixels
+        const CANVAS_HEIGHT = 600;       // Canvas height in pixels
+        const PLAYER_SIZE = BLOCK_SIZE;  // Player size matches block size
+        const GRAVITY = 0.5;             // Gravity strength for falling
+        const JUMP_VELOCITY = 12;        // Jump speed
+        const MOVE_SPEED = 5;            // Horizontal movement speed
 
-  <!-- Fixed Three.js and PointerLockControls CDN links -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/PointerLockControls.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/noisejs/2.0.0/perlin.min.js"></script>
+        // Define block types as an object for clarity
+        const BLOCK_TYPES = {
+            AIR: 0,
+            DIRT: 1,
+            STONE: 2,
+            WOOD: 3,
+            WATER: 4
+        };
 
-  <script>
-    let scene, camera, renderer, controls;
-    let raycaster, mouse = new THREE.Vector2();
-    let objects = [];
-    const blockSize = 1;
-    const terrainWidth = 32;
-    const terrainDepth = 32;
+        // Map block types to colors for rendering
+        const BLOCK_COLORS = {
+            [BLOCK_TYPES.AIR]: 'skyblue',    // Sky color for air blocks
+            [BLOCK_TYPES.DIRT]: 'sienna',
+            [BLOCK_TYPES.STONE]: 'gray',
+            [BLOCK_TYPES.WOOD]: 'saddlebrown',
+            [BLOCK_TYPES.WATER]: 'blue'
+        };
 
-    let velocity = new THREE.Vector3();
-    let direction = new THREE.Vector3();
-    const moveSpeed = 5.0; // Reduced speed for better control
-    const keys = {};
+        // Inventory items available to the player
+        const INVENTORY = [
+            BLOCK_TYPES.DIRT,
+            BLOCK_TYPES.STONE,
+            BLOCK_TYPES.WOOD,
+            BLOCK_TYPES.WATER
+        ];
 
-    const clock = new THREE.Clock();
+        // ** Game State Variables **
+        let world;                       // 2D array representing the game world
+        let playerX, playerY;            // Player position in pixels
+        let velocityX = 0, velocityY = 0;// Player movement velocities
+        let selectedBlockType = BLOCK_TYPES.DIRT; // Currently selected block
+        let keysHeld = {};               // Track which keys are pressed
+        let onGround = false;            // Is the player on the ground?
+        let gameTime = 0;                // Time for day-night cycle
+        let audioContext = null;         // Web Audio API context
 
-    function init() {
-      scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x87ceeb);
+        // ** Canvas Setup **
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
 
-      camera = new THREE.PerspectiveCamera(
-        75,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        1000
-      );
-      camera.position.set(0, 15, 0); // Start higher above terrain
-
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
-
-      // Improved lighting
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-      scene.add(ambientLight);
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(100, 100, 50);
-      scene.add(directionalLight);
-
-      controls = new THREE.PointerLockControls(camera, document.body);
-
-      const blocker = document.getElementById('blocker');
-      const instructions = document.getElementById('instructions');
-      document.addEventListener('click', function() {
-        controls.lock();
-      }, false);
-      
-      controls.addEventListener('lock', function() {
-        blocker.style.display = 'none';
-        instructions.style.display = 'none';
-      });
-      
-      controls.addEventListener('unlock', function() {
-        blocker.style.display = 'block';
-        instructions.style.display = 'block';
-      });
-
-      scene.add(controls.getObject());
-
-      raycaster = new THREE.Raycaster();
-      generateTerrain();
-      setupMovement();
-      setupMouseEvents();
-
-      window.addEventListener('resize', onWindowResize, false);
-      animate();
-    }
-
-    function generateTerrain() {
-      noise.seed(Math.random());
-      const materials = [
-        new THREE.MeshLambertMaterial({ color: 0x228B22 }), // Grass
-        new THREE.MeshLambertMaterial({ color: 0x808080 }), // Stone
-        new THREE.MeshLambertMaterial({ color: 0x654321 })  // Dirt
-      ];
-
-      for (let x = -terrainWidth/2; x < terrainWidth/2; x++) {
-        for (let z = -terrainDepth/2; z < terrainDepth/2; z++) {
-          let height = Math.floor(noise.simplex2(x/10, z/10) * 2 + 5;
-          for (let y = 0; y < height; y++) {
-            const material = y === height-1 ? materials[0] : 
-                            y > height-4 ? materials[2] : materials[1];
-            const cube = new THREE.Mesh(
-              new THREE.BoxGeometry(blockSize, blockSize, blockSize),
-              material
+        // ** Simple Noise Function for Procedural Generation **
+        // A basic pseudo-random noise function for terrain height
+        function getNoise(x) {
+            // Combine sine waves for varied terrain
+            return Math.floor(
+                (Math.sin(x * 0.1) * 10 + Math.sin(x * 0.05) * 15 + 30)
             );
-            cube.position.set(x, y, z);
-            scene.add(cube);
-            objects.push(cube);
-          }
         }
-      }
-    }
 
-    function setupMovement() {
-      document.addEventListener('keydown', e => keys[e.code] = true);
-      document.addEventListener('keyup', e => keys[e.code] = false);
-    }
-
-    function setupMouseEvents() {
-      document.addEventListener('mousedown', event => {
-        event.preventDefault();
-        raycaster.setFromCamera(new THREE.Vector2(), camera);
-        
-        const intersects = raycaster.intersectObjects(objects);
-        if (!intersects.length) return;
-
-        const intersect = intersects[0];
-        if (event.button === 0) { // Remove block
-          scene.remove(intersect.object);
-          objects.splice(objects.indexOf(intersect.object), 1);
-        } else if (event.button === 2) { // Add block
-          const normal = intersect.face.normal.clone();
-          const newPos = intersect.object.position.clone().add(normal);
-          
-          // Check if position is already occupied
-          if (!objects.some(obj => obj.position.equals(newPos))) {
-            const cube = new THREE.Mesh(
-              new THREE.BoxGeometry(blockSize, blockSize, blockSize),
-              new THREE.MeshLambertMaterial({ color: 0x8B4513 })
-            );
-            cube.position.copy(newPos);
-            scene.add(cube);
-            objects.push(cube);
-          }
+        // ** World Generation **
+        function generateWorld() {
+            // Initialize the 2D world array
+            world = new Array(WORLD_HEIGHT);
+            for (let y = 0; y < WORLD_HEIGHT; y++) {
+                world[y] = new Array(WORLD_WIDTH);
+                for (let x = 0; x < WORLD_WIDTH; x++) {
+                    let surfaceY = WORLD_HEIGHT - getNoise(x) - 1;
+                    if (y > surfaceY) {
+                        if (y > surfaceY + 3) {
+                            world[y][x] = BLOCK_TYPES.STONE; // Deep stone layer
+                        } else {
+                            world[y][x] = BLOCK_TYPES.DIRT;  // Surface dirt layer
+                        }
+                    } else {
+                        world[y][x] = BLOCK_TYPES.AIR;       // Above surface is air
+                    }
+                    // Add occasional water pools in low areas
+                    if (y > surfaceY && y < surfaceY + 2 && getNoise(x + 100) < 15) {
+                        world[y][x] = BLOCK_TYPES.WATER;
+                    }
+                    // Add trees (wood blocks) randomly on surface
+                    if (y === surfaceY && Math.random() < 0.05) {
+                        world[y][x] = BLOCK_TYPES.WOOD;
+                        if (y - 1 >= 0) world[y - 1][x] = BLOCK_TYPES.WOOD; // Tree height
+                    }
+                }
+            }
         }
-      });
 
-      document.addEventListener('contextmenu', e => e.preventDefault());
-    }
+        // ** Initialize Player **
+        function initPlayer() {
+            let surfaceY = WORLD_HEIGHT - getNoise(0) - 1;
+            playerX = WORLD_WIDTH / 2 * BLOCK_SIZE; // Start near center
+            playerY = surfaceY * BLOCK_SIZE;         // On surface
+            velocityX = 0;
+            velocityY = 0;
+            selectedBlockType = INVENTORY[0];
+        }
 
-    function updateMovement(delta) {
-      velocity.x -= velocity.x * 5.0 * delta;
-      velocity.z -= velocity.z * 5.0 * delta;
+        // ** Sound Effects Using Web Audio API **
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
 
-      direction.z = Number(keys['KeyW']) - Number(keys['KeyS']);
-      direction.x = Number(keys['KeyD']) - Number(keys['KeyA']);
-      direction.normalize();
+        function playSound(frequency, duration) {
+            if (!audioContext) return;
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.type = 'square'; // Simple waveform
+            oscillator.frequency.value = frequency;
+            gainNode.gain.value = 0.1;  // Keep volume low
+            oscillator.start();
+            setTimeout(() => oscillator.stop(), duration);
+        }
 
-      if (keys['KeyW'] || keys['KeyS']) velocity.z -= direction.z * moveSpeed * delta;
-      if (keys['KeyA'] || keys['KeyD']) velocity.x -= direction.x * moveSpeed * delta;
+        // ** Save Game State **
+        function saveGame() {
+            localStorage.setItem('world', JSON.stringify(world));
+            localStorage.setItem('playerX', playerX);
+            localStorage.setItem('playerY', playerY);
+            localStorage.setItem('selectedBlockType', selectedBlockType);
+        }
 
-      controls.moveRight(-velocity.x * delta);
-      controls.moveForward(-velocity.z * delta);
+        // ** Load Game State **
+        function loadGame() {
+            if (localStorage.getItem('world')) {
+                world = JSON.parse(localStorage.getItem('world'));
+                playerX = parseFloat(localStorage.getItem('playerX'));
+                playerY = parseFloat(localStorage.getItem('playerY'));
+                selectedBlockType = parseInt(localStorage.getItem('selectedBlockType'));
+            } else {
+                generateWorld();
+                initPlayer();
+            }
+        }
 
-      // Simple gravity simulation
-      camera.position.y -= 0.1;
-      const floorLevel = getFloorLevel(camera.position.x, camera.position.z) + 1.8;
-      if (camera.position.y < floorLevel) {
-        camera.position.y = floorLevel;
-      }
-    }
+        // ** Collision Detection **
+        function collide(x, y, width, height) {
+            let gridX1 = Math.floor(x / BLOCK_SIZE);
+            let gridX2 = Math.floor((x + width - 1) / BLOCK_SIZE);
+            let gridY1 = Math.floor(y / BLOCK_SIZE);
+            let gridY2 = Math.floor((y + height - 1) / BLOCK_SIZE);
+            for (let gy = gridY1; gy <= gridY2; gy++) {
+                for (let gx = gridX1; gx <= gridX2; gx++) {
+                    if (gx >= 0 && gx < WORLD_WIDTH && gy >= 0 && gy < WORLD_HEIGHT) {
+                        let block = world[gy][gx];
+                        if (block !== BLOCK_TYPES.AIR && block !== BLOCK_TYPES.WATER) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
 
-    function getFloorLevel(x, z) {
-      const pos = new THREE.Vector3(x, camera.position.y, z);
-      raycaster.set(pos, new THREE.Vector3(0, -1, 0));
-      const intersects = raycaster.intersectObjects(objects);
-      return intersects.length ? intersects[0].point.y : -Infinity;
-    }
+        // ** Update Game Logic **
+        function update(deltaTime) {
+            // Update game time for day-night cycle
+            gameTime += deltaTime;
 
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    }
+            // Apply gravity
+            velocityY -= GRAVITY;
 
-    function animate() {
-      requestAnimationFrame(animate);
-      const delta = clock.getDelta();
-      if (controls.isLocked) updateMovement(delta);
-      renderer.render(scene, camera);
-    }
+            // Handle horizontal movement
+            if (keysHeld['ArrowLeft'] || keysHeld['a']) velocityX = -MOVE_SPEED;
+            else if (keysHeld['ArrowRight'] || keysHeld['d']) velocityX = MOVE_SPEED;
+            else velocityX = 0;
 
-    window.onload = init;
-  </script>
+            // Handle jumping
+            if ((keysHeld['ArrowUp'] || keysHeld['w']) && onGround) {
+                velocityY = JUMP_VELOCITY;
+                playSound(300, 100); // Jump sound
+            }
+
+            // Update player position
+            let newX = playerX + velocityX;
+            let newY = playerY - velocityY; // Subtract because canvas y increases downward
+
+            // Check horizontal collision
+            if (!collide(newX, playerY, PLAYER_SIZE, PLAYER_SIZE)) {
+                playerX = newX;
+            } else {
+                velocityX = 0;
+            }
+
+            // Check vertical collision
+            if (!collide(playerX, newY, PLAYER_SIZE, PLAYER_SIZE)) {
+                playerY = newY;
+                onGround = false;
+            } else {
+                if (velocityY < 0) { // Moving downward
+                    playerY = Math.floor(playerY / BLOCK_SIZE) * BLOCK_SIZE;
+                    onGround = true;
+                } else { // Moving upward
+                    playerY = Math.ceil((playerY + PLAYER_SIZE) / BLOCK_SIZE) * BLOCK_SIZE - PLAYER_SIZE;
+                }
+                velocityY = 0;
+            }
+
+            // Keep player within bounds
+            playerX = Math.max(0, Math.min(playerX, WORLD_WIDTH * BLOCK_SIZE - PLAYER_SIZE));
+            playerY = Math.max(0, Math.min(playerY, WORLD_HEIGHT * BLOCK_SIZE - PLAYER_SIZE));
+        }
+
+        // ** Render the Game **
+        function draw() {
+            // Calculate day-night lighting (cycles every 20 seconds)
+            let light = 0.5 + 0.5 * Math.sin((gameTime / 20000) * 2 * Math.PI);
+
+            // Clear canvas with sky color adjusted for time
+            ctx.fillStyle = `rgba(135, 206, 235, ${light})`; // Skyblue with alpha
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Center the view on the player
+            let viewX = playerX - CANVAS_WIDTH / 2;
+            let viewY = playerY - CANVAS_HEIGHT / 2;
+            let startX = Math.max(0, Math.floor(viewX / BLOCK_SIZE));
+            let endX = Math.min(WORLD_WIDTH, Math.ceil((viewX + CANVAS_WIDTH) / BLOCK_SIZE));
+            let startY = Math.max(0, Math.floor(viewY / BLOCK_SIZE));
+            let endY = Math.min(WORLD_HEIGHT, Math.ceil((viewY + CANVAS_HEIGHT) / BLOCK_SIZE));
+
+            // Draw visible blocks
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    let block = world[y][x];
+                    ctx.fillStyle = BLOCK_COLORS[block];
+                    let canvasX = x * BLOCK_SIZE - viewX;
+                    let canvasY = y * BLOCK_SIZE - viewY;
+                    ctx.fillRect(canvasX, canvasY, BLOCK_SIZE, BLOCK_SIZE);
+                }
+            }
+
+            // Draw player as a red square
+            ctx.fillStyle = 'red';
+            ctx.fillRect(CANVAS_WIDTH / 2 - PLAYER_SIZE / 2, CANVAS_HEIGHT / 2 - PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+
+            // Draw inventory bar
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(10, CANVAS_HEIGHT - 40, INVENTORY.length * 40, 30);
+            INVENTORY.forEach((type, index) => {
+                ctx.fillStyle = BLOCK_COLORS[type];
+                ctx.fillRect(15 + index * 40, CANVAS_HEIGHT - 35, 20, 20);
+                if (type === selectedBlockType) {
+                    ctx.strokeStyle = 'yellow';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(15 + index * 40, CANVAS_HEIGHT - 35, 20, 20);
+                }
+            });
+
+            // Draw mini-map in top-right corner
+            const MINI_SIZE = 100;
+            for (let my = 0; my < MINI_SIZE; my++) {
+                for (let mx = 0; mx < MINI_SIZE; mx++) {
+                    let wx = Math.floor(mx * WORLD_WIDTH / MINI_SIZE);
+                    let wy = Math.floor(my * WORLD_HEIGHT / MINI_SIZE);
+                    ctx.fillStyle = BLOCK_COLORS[world[wy][wx]];
+                    ctx.fillRect(CANVAS_WIDTH - MINI_SIZE + mx, my, 1, 1);
+                }
+            }
+            // Player position on mini-map
+            ctx.fillStyle = 'red';
+            let miniPlayerX = (playerX / (WORLD_WIDTH * BLOCK_SIZE)) * MINI_SIZE;
+            let miniPlayerY = (playerY / (WORLD_HEIGHT * BLOCK_SIZE)) * MINI_SIZE;
+            ctx.fillRect(CANVAS_WIDTH - MINI_SIZE + miniPlayerX - 1, miniPlayerY - 1, 3, 3);
+
+            // Day-night overlay
+            ctx.fillStyle = `rgba(0,0,50,${0.5 * (1 - light)})`; // Blue tint at night
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        }
+
+        // ** Event Handlers **
+        window.addEventListener('keydown', (e) => {
+            keysHeld[e.key] = true;
+            if (e.key >= '1' && e.key <= '4') {
+                selectedBlockType = INVENTORY[e.key - '1'];
+                playSound(400, 50); // Selection sound
+            }
+            if (e.key === 'r') {
+                localStorage.clear();
+                init();
+            }
+            initAudio(); // Initialize audio on first input
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keysHeld[e.key] = false;
+        });
+
+        canvas.addEventListener('click', (e) => {
+            initAudio();
+            let rect = canvas.getBoundingClientRect();
+            let clickX = e.clientX - rect.left + (playerX - CANVAS_WIDTH / 2);
+            let clickY = e.clientY - rect.top + (playerY - CANVAS_HEIGHT / 2);
+            let gridX = Math.floor(clickX / BLOCK_SIZE);
+            let gridY = Math.floor(clickY / BLOCK_SIZE);
+            let playerGridX = Math.floor(playerX / BLOCK_SIZE);
+            let playerGridY = Math.floor(playerY / BLOCK_SIZE);
+
+            // Check if click is adjacent to player
+            if (Math.abs(gridX - playerGridX) <= 1 && Math.abs(gridY - playerGridY) <= 1) {
+                if (world[gridY][gridX] !== BLOCK_TYPES.AIR) {
+                    world[gridY][gridX] = BLOCK_TYPES.AIR;
+                    playSound(100, 150); // Break sound
+                    saveGame();
+                }
+            }
+        });
+
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            initAudio();
+            let rect = canvas.getBoundingClientRect();
+            let clickX = e.clientX - rect.left + (playerX - CANVAS_WIDTH / 2);
+            let clickY = e.clientY - rect.top + (playerY - CANVAS_HEIGHT / 2);
+            let gridX = Math.floor(clickX / BLOCK_SIZE);
+            let gridY = Math.floor(clickY / BLOCK_SIZE);
+            let playerGridX = Math.floor(playerX / BLOCK_SIZE);
+            let playerGridY = Math.floor(playerY / BLOCK_SIZE);
+
+            // Place block if adjacent and empty
+            if (Math.abs(gridX - playerGridX) <= 1 && Math.abs(gridY - playerGridY) <= 1) {
+                if (world[gridY][gridX] === BLOCK_TYPES.AIR) {
+                    world[gridY][gridX] = selectedBlockType;
+                    playSound(200, 100); // Place sound
+                    saveGame();
+                }
+            }
+        });
+
+        // ** Game Loop **
+        let lastTime = 0;
+        function gameLoop(timestamp) {
+            let deltaTime = (timestamp - lastTime) / 16.67; // Normalize to 60 FPS
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ** Initialization **
+        function init() {
+            loadGame();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game
+        init();
+    </script>
 </body>
 </html>
