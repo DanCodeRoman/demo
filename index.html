@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Minecraft-Inspired Web Game</title>
+  <!--
+    This CSS ensures that the canvas fills the screen and that the initial instructions
+    are clearly visible to the user until they click to start the game.
+  -->
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #blocker {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      z-index: 50;
+    }
+    #instructions {
+      position: absolute;
+      top: 50%;
+      width: 100%;
+      text-align: center;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 24px;
+      z-index: 100;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <!--
+    The blocker and instructions divs serve as an overlay to provide controls info.
+    When the user clicks, pointer lock is enabled and the overlay is hidden.
+  -->
+  <div id="blocker">
+    <div id="instructions">
+      <span style="font-size:40px">Click to Play</span>
+      <br/><br/>
+      <strong>Controls:</strong><br/>
+      Move: WASD<br/>
+      Look: Mouse<br/>
+      Left Click: Remove Block<br/>
+      Right Click: Place Block<br/><br/>
+      (This game is provided for educational, experimental, and creative purposes.)
+    </div>
+  </div>
+
+  <!-- Import Three.js, PointerLockControls, and noise.js from CDN for graphics, controls, and terrain noise generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/controls/PointerLockControls.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/noisejs/2.0.0/perlin.min.js"></script>
+
+  <script>
+    // Global variables for the Three.js scene, camera, renderer, and controls.
+    let scene, camera, renderer, controls;
+    let raycaster, mouse = new THREE.Vector2();
+    let objects = [];  // Array to store interactive objects (blocks)
+    const blockSize = 1;      // Dimensions of each block
+    const terrainWidth = 32;  // Number of blocks along the x-axis for terrain
+    const terrainDepth = 32;  // Number of blocks along the z-axis for terrain
+
+    // Movement-related variables
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+    const moveSpeed = 10.0;
+    const keys = {};  // Object to track pressed keys
+
+    // A clock to control animations and movement timing
+    const clock = new THREE.Clock();
+
+    // Function: Initialize the scene, camera, lights, controls, terrain, and events
+    function init() {
+      // Create a new scene and set a sky-blue background.
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);  // Light blue sky color
+
+      // Set up a perspective camera with a field of view of 75°.
+      camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+      camera.position.y = 2; // Start the camera above ground level
+
+      // Initialize the WebGL renderer with antialiasing enabled and add it to the document.
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      // Add ambient light and a directional light to illuminate the scene.
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+      scene.add(ambientLight);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(100, 100, 50);
+      scene.add(directionalLight);
+
+      // Set up PointerLockControls for first-person movement.
+      controls = new THREE.PointerLockControls(camera, renderer.domElement);
+
+      // Configure the on-screen instructions and pointer lock behavior.
+      const blocker = document.getElementById('blocker');
+      const instructions = document.getElementById('instructions');
+      instructions.addEventListener('click', function() {
+        controls.lock();
+      }, false);
+      controls.addEventListener('lock', function() {
+        instructions.style.display = 'none';
+        blocker.style.display = 'none';
+      });
+      controls.addEventListener('unlock', function() {
+        blocker.style.display = 'block';
+        instructions.style.display = '';
+      });
+      scene.add(controls.getObject());
+
+      // Initialize the raycaster for detecting block interactions (adding/removing blocks)
+      raycaster = new THREE.Raycaster();
+
+      // Generate a terrain using Perlin noise to create a varied landscape.
+      generateTerrain();
+
+      // Set up event listeners for player movement via keyboard.
+      setupMovement();
+
+      // Set up mouse events for interactive block placement and removal.
+      setupMouseEvents();
+
+      // Adjust renderer size on window resize to maintain aspect ratio.
+      window.addEventListener('resize', onWindowResize, false);
+
+      // Start the animation loop.
+      animate();
+    }
+
+    // Function: Generate terrain using Perlin noise.
+    // This function creates a grid of blocks. For each x,z coordinate, a height is computed
+    // using Perlin noise, and blocks are stacked vertically up to that height.
+    function generateTerrain() {
+      // Seed the noise function for consistency.
+      noise.seed(Math.random());
+
+      // Define a basic material for the terrain blocks (using a grass-like green color).
+      const material = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+
+      // Loop over a grid defined by terrainWidth and terrainDepth.
+      for (let x = -terrainWidth / 2; x < terrainWidth / 2; x++) {
+        for (let z = -terrainDepth / 2; z < terrainDepth / 2; z++) {
+          // Calculate height using Perlin noise; the value is scaled and normalized.
+          let height = Math.floor((noise.perlin2(x / 10, z / 10) + 1) * 2);
+          // Create and stack blocks based on the computed height.
+          for (let y = 0; y < height; y++) {
+            const geometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(x * blockSize, y * blockSize, z * blockSize);
+            scene.add(cube);
+            objects.push(cube);
+          }
+        }
+      }
+    }
+
+    // Function: Set up keyboard events for movement.
+    // The WASD keys update the keys object so that the animate loop can move the player.
+    function setupMovement() {
+      document.addEventListener('keydown', function(event) {
+        keys[event.code] = true;
+      }, false);
+      document.addEventListener('keyup', function(event) {
+        keys[event.code] = false;
+      }, false);
+    }
+
+    // Function: Set up mouse events for block interaction.
+    // Left-click removes a block, while right-click adds a block at the target location.
+    function setupMouseEvents() {
+      document.addEventListener('mousedown', function(event) {
+        // Prevent default actions (like text selection or context menu)
+        event.preventDefault();
+
+        // For raycasting, we use the center of the screen (0, 0 in normalized device coordinates)
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        const intersects = raycaster.intersectObjects(objects);
+        if (intersects.length > 0) {
+          const intersect = intersects[0];
+          if (event.button === 0) {  // Left click: Remove block
+            scene.remove(intersect.object);
+            objects.splice(objects.indexOf(intersect.object), 1);
+          } else if (event.button === 2) {  // Right click: Add block
+            // Determine the face normal and calculate the new block's position.
+            const normal = intersect.face.normal.clone();
+            const newPos = intersect.point.clone().add(normal.multiplyScalar(0.5));
+            newPos.x = Math.floor(newPos.x / blockSize) * blockSize + blockSize / 2;
+            newPos.y = Math.floor(newPos.y / blockSize) * blockSize + blockSize / 2;
+            newPos.z = Math.floor(newPos.z / blockSize) * blockSize + blockSize / 2;
+
+            // Create a new block using a distinct material (brown color for differentiation).
+            const geometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+            const material = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.copy(newPos);
+            scene.add(cube);
+            objects.push(cube);
+          }
+        }
+      }, false);
+
+      // Prevent the default context menu from appearing on right-click.
+      document.addEventListener('contextmenu', function(event) {
+        event.preventDefault();
+      }, false);
+    }
+
+    // Function: Update player movement based on keyboard input.
+    // The movement is applied each frame in the animate loop.
+    function updateMovement(delta) {
+      // Apply damping to the current velocity to simulate friction.
+      velocity.x -= velocity.x * 10.0 * delta;
+      velocity.z -= velocity.z * 10.0 * delta;
+
+      // Determine directional input: forward/backward (z) and left/right (x).
+      direction.z = Number(keys['KeyW']) - Number(keys['KeyS']);
+      direction.x = Number(keys['KeyD']) - Number(keys['KeyA']);
+      direction.normalize();  // Normalize to maintain consistent speed in diagonal movement
+
+      // Adjust the velocity based on the input and the desired movement speed.
+      if (keys['KeyW'] || keys['KeyS']) velocity.z -= direction.z * moveSpeed * delta;
+      if (keys['KeyA'] || keys['KeyD']) velocity.x -= direction.x * moveSpeed * delta;
+
+      // Move the player (camera) using PointerLockControls.
+      controls.moveRight(-velocity.x * delta);
+      controls.moveForward(-velocity.z * delta);
+    }
+
+    // Function: Adjust camera and renderer settings when the window is resized.
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // Animation loop: This function is called repeatedly to update the game state and render the scene.
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+
+      // Update the player's movement based on the time elapsed since the last frame.
+      updateMovement(delta);
+
+      // Render the scene from the perspective of the camera.
+      renderer.render(scene, camera);
+    }
+
+    // Initialize the game once the window has fully loaded.
+    window.onload = init;
+  </script>
+</body>
+</html>
